@@ -1,0 +1,58 @@
+# ============================================================
+# WARP + Free Router Docker Compose
+# ============================================================
+# Usage:
+#   docker compose up -d
+#   curl http://localhost:20128/v1/models
+# ============================================================
+# Required Linux kernel modules on host:
+#   sudo modprobe wireguard
+#   sudo modprobe ip_tables
+#   sudo modprobe ip6_tables
+# ============================================================
+
+services:
+  free-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: free-router-warp
+    restart: unless-stopped
+
+    ports:
+      - "${HOST_PORT:-20128}:20128"
+
+    environment:
+      - PORT=${PORT:-20128}
+      - TZ=${TZ:-UTC}
+
+    # Required capabilities for WireGuard
+    cap_add:
+      - NET_ADMIN      # Manage network interfaces, routing, iptables
+      - SYS_MODULE     # Load kernel modules (if needed)
+
+    # Required sysctls for WireGuard
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+
+    # Persist WARP registration across restarts
+    volumes:
+      - wgcf-data:/wgcf
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:20128/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+volumes:
+  wgcf-data:
+    name: free-router-wgcf-data
