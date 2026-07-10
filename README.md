@@ -15,25 +15,57 @@ OpenAI-compatible proxy untuk model AI dari OpenCode Zen. **Zero Node.js** — p
 - **No Node.js** — pure Go + shell, image cuma 31 MB
 - **Alpine Linux** — lightweight, secure
 
+## Prerequisites
+
+### 1. Docker
+
+- [Docker Engine](https://docs.docker.com/engine/install/) (26.x+) + Docker Compose v2
+
+### 2. Linux Kernel Modules (untuk WARP VPN)
+
+WARP VPN butuh WireGuard di host. Jalankan **sekali** sebelum start container:
+
+```bash
+sudo modprobe wireguard
+sudo modprobe ip_tables
+sudo modprobe ip6_tables
+```
+
+> Atau biar permanent, tambah ke `/etc/modules-load.d/warp.conf`:
+> ```
+> wireguard
+> ip_tables
+> ip6_tables
+> ```
+
+### 3. TUN Device
+
+Pastikan `/dev/net/tun` ada di host:
+```bash
+ls -la /dev/net/tun
+# → crw-rw-rw- 1 root root 10, 200 ...
+```
+
 ## Quick Start
 
-### Prerequisites
-
-- [Docker](https://docs.docker.com/engine/install/)
-- Untuk WARP VPN: `--privileged` atau `--cap-add=NET_ADMIN --device /dev/net/tun`
-
-### 1. Build Image
+### Opsi A — Docker Compose (Recommended)
 
 ```bash
 git clone https://github.com/rahadiana/free_ai.git
 cd free_ai
+docker compose up -d --build
+```
+
+Container langsung jalan dengan WARP + proxy di port `20128`.
+
+### Opsi B — Docker Run
+
+**Build image dulu:**
+```bash
 docker build -t free-ai-router .
 ```
 
-### 2. Run Container
-
 **Mode tanpa WARP** (hanya proxy — ringan):
-
 ```bash
 docker run -d \
   --name free-ai \
@@ -43,21 +75,25 @@ docker run -d \
 ```
 
 **Mode dengan WARP VPN** (proteksi IP):
-
 ```bash
 docker run -d \
   --name free-ai \
-  --privileged \
+  --cap-add=NET_ADMIN \
+  --cap-add=SYS_MODULE \
+  --device /dev/net/tun:/dev/net/tun \
+  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   -p 20128:20128 \
   free-ai-router
 ```
 
 **Dengan volume persistensi + port kustom:**
-
 ```bash
 docker run -d \
   --name free-ai \
-  --privileged \
+  --cap-add=NET_ADMIN \
+  --cap-add=SYS_MODULE \
+  --device /dev/net/tun:/dev/net/tun \
+  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   -p 8080:8080 \
   -e PORT=8080 \
   -v ./free-ai-data:/data \

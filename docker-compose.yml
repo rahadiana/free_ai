@@ -31,6 +31,10 @@ services:
       - NET_ADMIN      # Manage network interfaces, routing, iptables
       - SYS_MODULE     # Load kernel modules (if needed)
 
+    # Mount TUN device for WireGuard
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
     # Required sysctls for WireGuard
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
