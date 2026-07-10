@@ -22,9 +22,17 @@ WARP_TRIGGER_FILE="/tmp/warp-reconnect"
 
 # Cloudflare WARP API & endpoint
 WARP_API="https://api.cloudflareclient.com/v0a884"
-WARP_ENDPOINT="engage.cloudflareclient.com:2408"
 WARP_PUBLIC_KEY="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
 WARP_INTERFACE="warp"
+
+# ── Multi-endpoint & fallback ──────────────────────────────────────────────────
+# Multiple WARP IP endpoints + fallback UDP ports (official Cloudflare docs)
+# https://developers.cloudflare.com/cloudflare-one/connections/connect-devices/warp/deployment/firewall/
+WARP_ENDPOINTS="${WARP_ENDPOINTS:-162.159.192.1 162.159.193.6 162.159.193.5}"
+WARP_PORTS="${WARP_PORTS:-2408 500 1701 4500}"
+WARP_MAX_RETRIES="${WARP_MAX_RETRIES:-15}"
+WARP_RETRY_COUNT=0  # global counter: reset after successful connect, disable after max
+WARP_EP_IDX=0       # linear index endpoint:port (0 = first IP + first port)
 
 # Colors
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -90,13 +98,76 @@ setup_resolvconf() {
     echo "nameserver 1.0.0.1" >> /etc/resolvconf/resolv.conf.d/head
 }
 
-# ── Connect WARP (dengan retry) ──────────────────────────────────────────────
+# ── Helper: hitung total kombinasi endpoint:port ──────────────────────────────
+_total_combos() {
+    local eps=0 ports=0
+    for _ in $WARP_ENDPOINTS; do eps=$((eps + 1)); done
+    for _ in $WARP_PORTS; do ports=$((ports + 1)); done
+    echo $((eps * ports))
+}
+
+# ── Helper: pilih endpoint & port berikutnya ──────────────────────────────────
+# Cycling: ganti port dulu (2408→500→1701→4500), baru ganti IP
+# Kalo semua kombinasi habis → return 1 (exhausted / wrap around)
+next_endpoint() {
+    local total
+    total=$(_total_combos)
+    WARP_EP_IDX=$((WARP_EP_IDX + 1))
+    [ "$WARP_EP_IDX" -ge "$total" ] && { WARP_EP_IDX=0; return 1; }
+    return 0
+}
+
+# ── Helper: set WARP_EP dan WARP_PORT dari linear index ──────────────────────
+resolve_endpoint() {
+    local ports=0 ep_idx=0 port_idx=0 current=0
+    for _ in $WARP_PORTS; do ports=$((ports + 1)); done
+
+    ep_idx=$((WARP_EP_IDX / ports))
+    port_idx=$((WARP_EP_IDX % ports))
+
+    # Ambil IP ke-ep_idx
+    current=0; WARP_EP=""
+    for ip in $WARP_ENDPOINTS; do
+        [ "$current" -eq "$ep_idx" ] && { WARP_EP="$ip"; break; }
+        current=$((current + 1))
+    done
+
+    # Ambil port ke-port_idx
+    current=0; WARP_PORT=""
+    for p in $WARP_PORTS; do
+        [ "$current" -eq "$port_idx" ] && { WARP_PORT="$p"; break; }
+        current=$((current + 1))
+    done
+
+    [ -n "$WARP_EP" ] && [ -n "$WARP_PORT" ]
+}
+
+# ── Helper: cek apakah semua endpoint sudah exhausted ─────────────────────────
+is_exhausted() {
+    local total
+    total=$(_total_combos)
+    [ "$WARP_RETRY_COUNT" -ge "$WARP_MAX_RETRIES" ] || [ "$WARP_EP_IDX" -eq 0 -a "$WARP_RETRY_COUNT" -gt 0 ] && {
+        [ "$WARP_RETRY_COUNT" -ge "$total" ]
+        return $?
+    }
+    return 1
+}
+
+# ── Connect WARP (dengan retry + multi-endpoint) ──────────────────────────────
 warp_connect() {
-    local MAX_ATTEMPTS=3
     local attempt=1
 
-    while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
-        info "WARP connect attempt ${attempt}/${MAX_ATTEMPTS}..."
+    while [ "$attempt" -le 3 ]; do
+        # Resolve current endpoint dari index
+        resolve_endpoint || {
+            err "Endpoint index ${WARP_EP_IDX} out of range"
+            return 1
+        }
+
+        info "WARP connect attempt ${attempt}/3 — ${WARP_EP}:${WARP_PORT}"
+
+        # Update config dengan endpoint terbaru
+        sed -i "s/^Endpoint = .*/Endpoint = ${WARP_EP}:${WARP_PORT}/" "$WARP_CONFIG"
 
         # Cleanup existing
         wg-quick down "$WARP_INTERFACE" 2>/dev/null || true
@@ -105,21 +176,47 @@ warp_connect() {
         cp "$WARP_CONFIG" "/etc/wireguard/${WARP_INTERFACE}.conf"
         chmod 600 "/etc/wireguard/${WARP_INTERFACE}.conf"
 
-        # Jalankan wg-quick — redirect stderr untuk parsing
+        # Jalankan wg-quick
         WG_OUTPUT=$(wg-quick up "$WARP_INTERFACE" 2>&1) || true
         echo "$WG_OUTPUT" | while IFS= read -r line; do echo "  $line"; done
 
         # Cek apakah interface berhasil dibuat
         if ip link show "$WARP_INTERFACE" >/dev/null 2>&1; then
-            info "Interface ${WARP_INTERFACE} berhasil dibuat"
-            return 0
+            # Cek handshake dalam 3 detik
+            sleep 2
+            if wg show "$WARP_INTERFACE" 2>/dev/null | grep -q 'latest handshake'; then
+                info "Interface ${WARP_INTERFACE} berhasil — handshake OK"
+                WARP_RETRY_COUNT=0
+                return 0
+            fi
+            # Handshake belum — tunggu sebentar
+            sleep 3
+            if wg show "$WARP_INTERFACE" 2>/dev/null | grep -q 'latest handshake'; then
+                info "Interface ${WARP_INTERFACE} berhasil — handshake OK (delayed)"
+                WARP_RETRY_COUNT=0
+                return 0
+            fi
+            info "Interface up tapi handshake belum — coba endpoint lain"
+        fi
+
+        # Gagal — cleanup dan coba endpoint/port berikutnya
+        wg-quick down "$WARP_INTERFACE" 2>/dev/null || true
+        WARP_RETRY_COUNT=$((WARP_RETRY_COUNT + 1))
+
+        # Next endpoint (cycle port/IP)
+        next_endpoint || WARP_RETRY_COUNT=$((WARP_RETRY_COUNT + 999))  # force exhaust
+
+        # Cek exhaustion
+        if [ "$WARP_RETRY_COUNT" -ge "$WARP_MAX_RETRIES" ]; then
+            err "WARP: semua endpoint & port habis (${WARP_RETRY_COUNT} percobaan)"
+            return 2  # exhausted — auto-disable
         fi
 
         attempt=$((attempt + 1))
-        [ "$attempt" -le "$MAX_ATTEMPTS" ] && sleep 3
+        sleep 2
     done
 
-    err "Gagal menghubungkan WARP setelah ${MAX_ATTEMPTS} percobaan"
+    err "Gagal menghubungkan WARP setelah 3 percobaan"
     return 1
 }
 
@@ -135,17 +232,37 @@ setup_warp() {
     mkdir -p "$DATA_DIR"
     setup_resolvconf
 
+    # Inisialisasi endpoint pertama
+    WARP_EP_IDX=0
+    resolve_endpoint || {
+        err "Gagal resolve endpoint default"
+        return 1
+    }
+
     # Register atau pakai config lama
     if [ -f "$WARP_CONFIG" ] && [ -s "$WARP_CONFIG" ]; then
         info "Menggunakan konfigurasi WARP yang tersimpan"
+        # Update endpoint di config lama
+        sed -i "s/^Endpoint = .*/Endpoint = ${WARP_EP}:${WARP_PORT}/" "$WARP_CONFIG" 2>/dev/null || true
     else
         info "Registrasi WARP baru..."
         register_warp || return 1
     fi
 
-    # Konek ke WARP
+    # Konek ke WARP (dengan multi-endpoint fallback)
     log "Menghubungkan ke Cloudflare WARP..."
-    warp_connect || return 1
+    log "Endpoint: ${WARP_ENDPOINTS}"
+    log "Ports:    ${WARP_PORTS}"
+
+    warp_connect
+    local WC_RESULT=$?
+    if [ "$WC_RESULT" -eq 2 ]; then
+        warn "Semua endpoint & port WARP gagal — auto-disable WARP"
+        WARP_ENABLED="false"
+        return 1
+    elif [ "$WC_RESULT" -ne 0 ]; then
+        return 1
+    fi
 
     # Verifikasi
     sleep 3
@@ -236,7 +353,7 @@ MTU = 1280
 
 [Peer]
 PublicKey = ${WARP_PUBLIC_KEY}
-Endpoint = ${WARP_ENDPOINT}
+Endpoint = ${WARP_EP}:${WARP_PORT}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 WARPEOF
@@ -344,17 +461,27 @@ while true; do
         warn "║  WARP RECONNECT TRIGGERED by upstream error ${REASON} ║"
         warn "╚══════════════════════════════════════════════════════════╝"
         log "Memutus WARP dan reconnect untuk ganti IP..."
+
+        # Disconnect
         if ip link show "$WARP_INTERFACE" >/dev/null 2>&1; then
             wg-quick down "$WARP_INTERFACE" 2>/dev/null || true
-            sleep 3
+            sleep 2
         fi
-        # Hapus cached handshake state agar monitoring loop tahu ini fresh connect
         WARP_WAS_ACTIVE=false
-        log "Menghubungkan WARP kembali..."
+
+        # Coba endpoint/port berikutnya (cycle untuk dapet IP baru)
+        next_endpoint
+        resolve_endpoint
+        log "Mencoba endpoint: ${WARP_EP}:${WARP_PORT}"
+
+        # Update config
+        sed -i "s/^Endpoint = .*/Endpoint = ${WARP_EP}:${WARP_PORT}/" "$WARP_CONFIG" 2>/dev/null || true
+        cp "$WARP_CONFIG" "/etc/wireguard/${WARP_INTERFACE}.conf" 2>/dev/null || true
+
+        # Reconnect
         wg-quick up "$WARP_INTERFACE" 2>/dev/null || true
         sleep 5
-        # Reset error counter di proxy (trigger file mechanism akan reset sendiri via timeout)
-        log "WARP reconnect selesai — IP baru seharusnya terassign"
+        log "WARP reconnect selesai — endpoint ${WARP_EP}:${WARP_PORT}"
     fi
 
     # Cek WARP (setiap 30 detik)
@@ -365,17 +492,27 @@ while true; do
                 WARP_WAS_ACTIVE=true
             else
                 if [ "$WARP_WAS_ACTIVE" = true ]; then
-                    warn "WARP handshake lost! Reconnecting..."
+                    warn "WARP handshake lost! Coba endpoint lain..."
                     wg-quick down "$WARP_INTERFACE" 2>/dev/null || true
                     sleep 2
+                    next_endpoint || true
+                    resolve_endpoint
+                    sed -i "s/^Endpoint = .*/Endpoint = ${WARP_EP}:${WARP_PORT}/" "$WARP_CONFIG" 2>/dev/null || true
+                    cp "$WARP_CONFIG" "/etc/wireguard/${WARP_INTERFACE}.conf" 2>/dev/null || true
+                    info "Mencoba ${WARP_EP}:${WARP_PORT}"
                     wg-quick up "$WARP_INTERFACE" 2>/dev/null || true
                 fi
             fi
         else
             # Interface tidak ada — coba buat ulang (tapi tidak spam)
             if [ "$WARP_WAS_ACTIVE" = true ]; then
-                warn "WARP interface hilang! Reconnecting..."
+                warn "WARP interface hilang! Coba endpoint lain..."
                 sleep 5
+                next_endpoint || true
+                resolve_endpoint
+                sed -i "s/^Endpoint = .*/Endpoint = ${WARP_EP}:${WARP_PORT}/" "$WARP_CONFIG" 2>/dev/null || true
+                cp "$WARP_CONFIG" "/etc/wireguard/${WARP_INTERFACE}.conf" 2>/dev/null || true
+                info "Mencoba ${WARP_EP}:${WARP_PORT}"
                 wg-quick up "$WARP_INTERFACE" 2>/dev/null || true
             fi
         fi
