@@ -64,15 +64,51 @@ docker run -d \
   free-ai-router
 ```
 
-## Usage
+## Usage with OpenCode
 
-Point AI tool lo ke:
+Cara configure Free AI Router sebagai provider di OpenCode:
+
+### 1. Add credential
+
+Di TUI OpenCode, jalankan:
 
 ```
-Base URL: http://localhost:20128/v1
-API Key:  (kosong untuk free model, isi untuk paid model)
-Model:    deepseek  (atau full ID model)
+/connect
 ```
+
+Pilih **Other** → enter provider ID `freeai` → enter API key kosong (enter aja).
+
+### 2. Config file
+
+Buat `opencode.json` di root project:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "freeai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Free AI Router",
+      "options": {
+        "baseURL": "http://localhost:20128/v1"
+      },
+      "models": {
+        "deepseek-v4-flash-free":  { "name": "DeepSeek V4 Flash (Free)" },
+        "mimo-v2.5-free":          { "name": "MiMo V2.5 (Free)" },
+        "nemotron-3-ultra-free":   { "name": "Nemotron 3 Ultra (Free)" },
+        "north-mini-code-free":    { "name": "North Mini Code (Free)" },
+        "hy3-free":                { "name": "HY3 (Free)" }
+      }
+    }
+  }
+}
+```
+
+### 3. Pilih model
+
+Jalankan `/models` di OpenCode → pilih model Free AI Router.
+
+> Semua 50+ model dari Zen API juga available — tinggal tambahin ke `models` di config.
 
 ### Test with curl
 
