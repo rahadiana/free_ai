@@ -93,11 +93,76 @@ Buat `opencode.json` di root project:
         "baseURL": "http://localhost:20128/v1"
       },
       "models": {
-        "deepseek-v4-flash-free":  { "name": "DeepSeek V4 Flash (Free)" },
-        "mimo-v2.5-free":          { "name": "MiMo V2.5 (Free)" },
-        "nemotron-3-ultra-free":   { "name": "Nemotron 3 Ultra (Free)" },
-        "north-mini-code-free":    { "name": "North Mini Code (Free)" },
-        "hy3-free":                { "name": "HY3 (Free)" }
+        "deepseek-v4-flash-free": {
+          "id": "deepseek-v4-flash-free",
+          "name": "DeepSeek V4 Flash Free",
+          "reasoning": true,
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "mimo-v2.5-free": {
+          "id": "mimo-v2.5-free",
+          "name": "MiMo V2.5 Free",
+          "reasoning": true,
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": ["text", "image", "video", "audio"],
+            "output": ["text"]
+          }
+        },
+        "nemotron-3-ultra-free": {
+          "id": "nemotron-3-ultra-free",
+          "name": "Nemotron 3 Ultra Free",
+          "reasoning": true,
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "north-mini-code-free": {
+          "id": "north-mini-code-free",
+          "name": "North Mini Code Free",
+          "reasoning": false,
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "hy3-free": {
+          "id": "hy3-free",
+          "name": "HY3 Free",
+          "reasoning": true,
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        }
       }
     }
   }
