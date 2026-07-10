@@ -7,7 +7,9 @@ OpenAI-compatible proxy untuk model AI dari OpenCode Zen. **Zero Node.js** — p
 - **All models** — 50+ model, gratis & paid (butuh API key untuk paid)
 - **Go static binary** — event-driven concurrency, ribuan request parallel
 - **Cloudflare WARP VPN** — ganti IP otomatis via WireGuard
-- **Auto WARP Reconnect** — saat upstream return non-200/non-401, WARP disconnect + reconnect (ganti IP)
+- **Multi-endpoint + Fallback Port** — 3 IP WARP × 4 UDP port (2408, 500, 1701, 4500)
+- **Auto WARP Reconnect** — saat upstream return non-200/non-401, WARP disconnect + reconnect (ganti IP & port)
+- **Auto-disable WARP** — kalo semua endpoint gagal, WARP dimatiin, proxy tetap jalan
 - **Streaming support** — SSE (Server-Sent Events)
 - **OpenAI-compatible** — works with Cline, Claude Code, Cursor, any OpenAI client
 - **No Node.js** — pure Go + shell, image cuma 31 MB
@@ -130,6 +132,9 @@ WARP disconnect/reconnect otomatis saat error non-200/non-401
 | `WARP_RECONNECT_ON_ERROR` | `true` | Auto reconnect WARP saat upstream error |
 | `WARP_ERROR_THRESHOLD` | `2` | Jumlah error berturut-turut sebelum reconnect |
 | `WARP_LICENSE` | `(empty)` | License key WARP+ |
+| `WARP_ENDPOINTS` | `162.159.192.1 162.159.193.6 162.159.193.5` | Daftar IP WARP endpoint |
+| `WARP_PORTS` | `2408 500 1701 4500` | Daftar UDP port WARP (fallback sequence) |
+| `WARP_MAX_RETRIES` | `15` | Maks percobaan sebelum auto-disable WARP |
 | `DATA_DIR` | `/data` | Direktori persistensi WARP config |
 
 ## WARP Reconnect Logic
@@ -138,10 +143,26 @@ WARP disconnect/reconnect otomatis saat error non-200/non-401
 Upstream response:
   ├── 200 → success, reset error counter
   ├── 401 → AuthError (missing API key), skip
-  └── lainnya (403, 429, 502, dll) → trigger WARP reconnect
+  └── lainnya (3xx, 403, 429, 502, dll) → trigger WARP reconnect
 ```
 
-Setelah N kali error (default 2), proxy nulis trigger file → entrypoint detek → disconnect WARP → reconnect → **IP baru**.
+Setelah N kali error (default 2), proxy nulis trigger file → entrypoint detek → disconnect → **cycle ke endpoint:port berikutnya** → reconnect → **IP baru**.
+
+### Multi-endpoint & Fallback Port Cycle
+
+WARP otomatis cycle melalui kombinasi IP endpoint + port setiap kali reconnect:
+
+| # | Endpoint:Port | Keterangan |
+|---|--------------|------------|
+| 0 | `162.159.192.1:2408` | IP utama, port default |
+| 1 | `162.159.192.1:500` | IP utama, fallback port |
+| 2 | `162.159.192.1:1701` | IP utama, fallback port |
+| 3 | `162.159.192.1:4500` | IP utama, fallback port |
+| 4 | `162.159.193.6:2408` | IP alternatif, port default |
+| ... | ... | ... |
+| 11 | `162.159.193.5:4500` | IP terakhir, port terakhir |
+
+Kalo semua 12 kombinasi gagal setelah `WARP_MAX_RETRIES` percobaan (default 15), WARP **auto-disable** — proxy tetap jalan tanpa VPN.
 
 ## Container Details
 
@@ -168,4 +189,6 @@ Setelah N kali error (default 2), proxy nulis trigger file → entrypoint detek 
 - **Paid models** (Claude, GPT, Gemini, dll) butuh API key dari OpenCode Zen
 - Cloudflare WARP membutuhkan `--privileged` untuk akses TUN device
 - WARP config tersimpan di `/data` — survive container restart
+- WARP otomatis fallback ke UDP port 500/1701/4500 kalo port 2408 diblokir
+- Kalo semua endpoint WARP gagal, WARP auto-disable — proxy tetap jalan normal
 - Proxy ini cuma nerusin request — data lo ga disimpan
