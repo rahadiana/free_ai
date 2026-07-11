@@ -25,6 +25,7 @@ services:
     environment:
       - PORT=${PORT:-20128}
       - TZ=${TZ:-UTC}
+      - WARP_ENABLED=${WARP_ENABLED:-true}
 
     # Required capabilities for WireGuard
     cap_add:

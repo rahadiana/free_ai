@@ -454,7 +454,6 @@ while true; do
 
     # Cek WARP trigger file (dari free-router Go binary — upstream non-2xx/non-401)
     if [ "$WARP_RECONNECT_ON_ERROR" = "true" ] && [ -f "$WARP_TRIGGER_FILE" ]; then
-        local REASON
         REASON=$(cat "$WARP_TRIGGER_FILE" 2>/dev/null || echo "unknown")
         rm -f "$WARP_TRIGGER_FILE"
         warn "╔══════════════════════════════════════════════════════════╗"

@@ -58,6 +58,17 @@ docker compose up -d --build
 
 Container langsung jalan dengan WARP + proxy di port `20128`.
 
+> **Tanpa WARP** (lingkungan tanpa TUN device / tidak butuh VPN):
+> ```bash
+> WARP_ENABLED=false docker compose up -d --build
+> ```
+>
+> Atau simpan di file `.env` biar permanent:
+> ```bash
+> echo "WARP_ENABLED=false" >> .env
+> docker compose up -d --build
+> ```
+
 ### Opsi B — Docker Run
 
 **Build image dulu:**
@@ -261,11 +272,13 @@ WARP disconnect/reconnect otomatis saat error non-200/non-401
 
 ## Environment Variables
 
+Semua variable bisa di-set langsung (`-e` flag) atau via file `.env` untuk docker-compose.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `20128` | Port proxy |
 | `HOST` | `0.0.0.0` | Listen address |
-| `WARP_ENABLED` | `true` | Aktifkan Cloudflare WARP VPN |
+| `WARP_ENABLED` | `true` | Aktifkan Cloudflare WARP VPN. Set `false` untuk mode tanpa WARP |
 | `WARP_RECONNECT_ON_ERROR` | `true` | Auto reconnect WARP saat upstream error |
 | `WARP_ERROR_THRESHOLD` | `2` | Jumlah error berturut-turut sebelum reconnect |
 | `WARP_LICENSE` | `(empty)` | License key WARP+ |
@@ -320,11 +333,47 @@ Kalo semua 12 kombinasi gagal setelah `WARP_MAX_RETRIES` percobaan (default 15),
 | `free-router.go` | Go HTTP proxy server (stdlib-only) |
 | `entrypoint.sh` | Container startup script (WARP + proxy) |
 
+## Troubleshooting
+
+### Container jalan tapi endpoint "Connection reset by peer"
+
+Penyebab: WARP routing (`AllowedIPs = 0.0.0.0/0`) mengganggu koneksi lokal ke proxy.
+
+**Solusi:** Set `WARP_ENABLED=false` atau pastikan container punya akses TUN device yang benar.
+
+### Error `/app/entrypoint.sh: local: line 457: not in a function`
+
+Penyebab: Keyword `local` dipakai di luar fungsi di shell Alpine (busybox ash).
+
+**Solusi:** Update entrypoint.sh — hapus keyword `local` di global scope. (Sudah di-fix di versi terbaru.)
+
+### WARP connect gagal — "TUN device not found"
+
+```bash
+# Pastikan TUN device ada di host
+ls -la /dev/net/tun
+
+# Load kernel modules
+sudo modprobe wireguard
+sudo modprobe ip_tables
+sudo modprobe ip6_tables
+```
+
+### Port 20128 sudah dipakai
+
+```bash
+# Cek pemakai port
+ss -tlnp | grep 20128
+
+# Ganti port
+HOST_PORT=20130 docker compose up -d
+```
+
 ## Notes
 
 - **Free models** bisa langsung dipake tanpa API key
 - **Paid models** (Claude, GPT, Gemini, dll) butuh API key dari OpenCode Zen
-- Cloudflare WARP membutuhkan `--privileged` untuk akses TUN device
+- Cloudflare WARP membutuhkan `--cap-add=NET_ADMIN` dan akses `/dev/net/tun` (sudah di `docker-compose.yml`)
 - WARP config tersimpan di `/data` — survive container restart
 - WARP otomatis fallback ke UDP port 500/1701/4500 kalo port 2408 diblokir
 - Kalo semua endpoint WARP gagal, WARP auto-disable — proxy tetap jalan normal
