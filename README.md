@@ -69,6 +69,58 @@ Container langsung jalan dengan WARP + proxy di port `20128`.
 > docker compose up -d --build
 > ```
 
+<details>
+<summary>📄 `docker-compose.yml` — selengkapnya</summary>
+
+```yaml
+services:
+  free-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: free-router-warp
+    restart: unless-stopped
+
+    ports:
+      - "${HOST_PORT:-20128}:20128"
+
+    environment:
+      - PORT=${PORT:-20128}
+      - TZ=${TZ:-UTC}
+      - WARP_ENABLED=${WARP_ENABLED:-true}   # ← bisa di-override via .env / CLI
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+
+    volumes:
+      - wgcf-data:/wgcf
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:20128/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+volumes:
+  wgcf-data:
+    name: free-router-wgcf-data
+```
+</details>
+
 ### Opsi B — Docker Run
 
 **Build image dulu:**
